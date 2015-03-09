@@ -344,7 +344,7 @@ class Spot_Phys(Phys_Flight):
         # this step is very slow. for debugging, run this once, pickle, then load
         # all_fly_traces, all_fly_saccades = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
         
-        all_fly_traces = pd.read_pickle('all_fly_traces.save')
+        all_fly_traces = pd.read_pickle(self.basename[-15:]+'_all_fly_traces.save')
         
         fig = plt.figure(figsize=(15,9))  
         gs = gridspec.GridSpec(3,4,height_ratios=[1,1,.1])
