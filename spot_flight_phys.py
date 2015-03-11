@@ -327,8 +327,8 @@ class Spot_Phys(Phys_Flight):
         self.stim_types = stim_types  #change to integer, although nans are also useful
         self.stim_types_labels = stim_types_labels
            
-    def plot_vm_wba_stim_corr(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,8,dtype=int),\
-                              vm_lim=[-70,-50],wba_lim=[-45,45],if_save=True,if_x_zoom=True): 
+    def plot_vm_wba_stim_corr(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,15,dtype=int),\
+                              vm_lim=[-80,-60],wba_lim=[-45,45],if_save=True,if_x_zoom=True): 
     
         # make figure four rows of signals -- vm, wba, stimulus, vm-wba corr x
         # four columns of stimulus types
