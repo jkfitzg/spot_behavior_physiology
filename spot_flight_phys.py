@@ -22,43 +22,77 @@ import scipy as sp
 #---------------------------------------------------------------------------#
 
 class Phys_Flight():  
-    def __init__(self, fname):
+    def __init__(self, fname, pin_behavior=False):
         if fname.endswith('.abf'):
             self.basename = ''.join(fname.split('.')[:-1])
             self.fname = fname
         else:
             self.basename = fname
             self.fname = self.basename + '.abf'  #check here for fname type 
+        
+        self.pin_behavior = pin_behavior
                   
     def open_abf(self,exclude_indicies=[]):        
         abf = read_abf(self.fname)              
         
-        # added features to exclude specific time intervals
-        n_indicies = np.size(abf['x_ch']) #assume all channels have the same sample #s 
-        inc_indicies = np.setdiff1d(range(n_indicies),exclude_indicies);
+        if self.pin_behavior: #different channels here, although same file structures
+            n_indicies = np.size(abf['stim_x']) #assume all channels have the same sample #s 
+            inc_indicies = np.setdiff1d(range(n_indicies),exclude_indicies);
                    
-        self.xstim = np.array(abf['x_ch'])[inc_indicies]
-        self.ystim = np.array(abf['y_ch'])[inc_indicies]
+            self.xstim = np.array(abf['stim_x'])[inc_indicies]
+            self.ystim = np.array(abf['stim_y'])[inc_indicies]
 
-        self.samples = np.arange(self.xstim.size)  #this is adjusted
-        self.t = self.samples/float(10000) # sampled at 10,000 hz -- encode here?
+            self.samples = np.arange(self.xstim.size)  #this is adjusted
+            self.t = self.samples/float(1000) # sampled at 1,000 hz -- encode here?
  
-        #now process wing signal
-        lwa_v = np.array(abf['wba_l'])[inc_indicies]
-        rwa_v = np.array(abf['wba_r'])[inc_indicies]
+            #now process wing signal
+            lwa_v = np.array(abf['l_wba'])[inc_indicies]
+            rwa_v = np.array(abf['r_wba'])[inc_indicies]
         
-        self.lwa = process_wings(lwa_v)
-        self.rwa = process_wings(rwa_v)
+            self.lwa = lwa_v
+            self.rwa = rwa_v
         
-        lmr = self.lwa - self.rwa
-        self.raw_lmr = lmr
-        self.lmr = lmr
+            lmr = self.lwa - self.rwa
+            self.raw_lmr = lmr
+            self.lmr = lmr
         
-        self.ao = np.array(abf['patid'])[inc_indicies]
+            self.ao = np.array(abf['ao1'])[inc_indicies]
         
-        self.vm = np.array(abf['vm'])[inc_indicies] - 13 #offset for bridge potential
-        self.tach = np.array(abf['tach'])[inc_indicies]
-        self.n_nonflight_trs = 0 #will update
+            self.vm = np.nan*np.ones_like(lmr)    #empty
+            self.tach = np.array([])  #empty
+            self.n_nonflight_trs = 0 #will update
+            
+        else:
+        
+            # added features to exclude specific time intervals
+            n_indicies = np.size(abf['x_ch']) #assume all channels have the same sample #s 
+            inc_indicies = np.setdiff1d(range(n_indicies),exclude_indicies);
+               
+            self.xstim = np.array(abf['x_ch'])[inc_indicies]
+            self.ystim = np.array(abf['y_ch'])[inc_indicies]
+
+            self.samples = np.arange(self.xstim.size)  #this is adjusted
+            self.t = self.samples/float(10000) # sampled at 10,000 hz -- encode here?
+
+            #now process wing signal
+            lwa_v = np.array(abf['wba_l'])[inc_indicies]
+            rwa_v = np.array(abf['wba_r'])[inc_indicies]
+    
+            self.lwa = process_wings(lwa_v)
+            self.rwa = process_wings(rwa_v)
+    
+            lmr = self.lwa - self.rwa
+            self.raw_lmr = lmr
+            self.lmr = lmr
+    
+            self.ao = np.array(abf['patid'])[inc_indicies]
+    
+            self.vm = np.array(abf['vm'])[inc_indicies] - 13 #offset for bridge potential
+            self.tach = np.array(abf['tach'])[inc_indicies]
+            self.n_nonflight_trs = 0 #will update
+    
+        
+        
             
     def _is_flying(self, start_i, stop_i, percent_thres = .90):  #fix this critera
         #check that animal is flying using the tachometer signal
@@ -206,13 +240,13 @@ class Spot_Phys(Phys_Flight):
         
         tr_start = self.samples[np.where(ao_diff <= -5)]
         start_diff = np.diff(tr_start)
-        redundant_starts = tr_start[np.where(start_diff < 1000)]
+        redundant_starts = tr_start[np.where(start_diff < 100)]
         clean_tr_starts_unaligned = np.setdiff1d(tr_start,redundant_starts)+1
         clean_tr_starts = clean_tr_starts_unaligned
         
         # now shift tr_start based on the xstim signal
         # look within a ~3000 window for the start
-        clean_tr_starts = clean_tr_starts - 1500  # ***** update this to be exact. later
+        #clean_tr_starts = clean_tr_starts - 1500  # ***** update this to be exact. later
         
         # max_shift = int(3500e6)
 #         n_starts = np.size(clean_tr_starts_unaligned)
@@ -229,7 +263,7 @@ class Spot_Phys(Phys_Flight):
 #         
         tr_stop = self.samples[np.where(ao_diff >= 5)]
         stop_diff = np.diff(tr_stop)
-        redundant_stops = tr_stop[np.where(stop_diff < 1000)] 
+        redundant_stops = tr_stop[np.where(stop_diff < 100)] 
         clean_tr_stops = np.setdiff1d(tr_stop,redundant_stops)+1
         
         # check that first start is before first stop
@@ -245,7 +279,10 @@ class Spot_Phys(Phys_Flight):
             clean_tr_starts = np.delete(clean_tr_starts,0)
         
         # now overwrite clean_tr_stops
-        clean_tr_stops = clean_tr_starts + 9080
+        if self.pin_behavior:
+            clean_tr_stops = clean_tr_starts + 908 
+        else:
+            clean_tr_stops = clean_tr_starts + 9080
         
         # define tr_stop based on the end of xstim plateauing
         # around 8.6 ao
@@ -291,7 +328,7 @@ class Spot_Phys(Phys_Flight):
         #self.pre_loom_stim_ons = pre_loom_stim
         
         #here remove all trials in which the fly is not flying. 
-        self.remove_non_flight_trs()
+        #self.remove_non_flight_trs()
         
     def parse_stim_type(self):
         #calculate the stimulus type
@@ -311,7 +348,10 @@ class Spot_Phys(Phys_Flight):
         
         #first loop through to get the unique ao values
         for tr in range(self.n_trs): 
-            this_start = self.tr_starts[tr]-4000
+            if self.pin_behavior:
+                this_start = self.tr_starts[tr]-400
+            else:
+                this_start = self.tr_starts[tr]-4000
             this_stop = self.tr_starts[tr]
             tr_ao_codes[tr] = round(np.mean(self.ao[this_start:this_stop]),1)   
         unique_tr_ao_codes = np.unique(tr_ao_codes) 
@@ -327,13 +367,18 @@ class Spot_Phys(Phys_Flight):
         self.stim_types = stim_types  #change to integer, although nans are also useful
         self.stim_types_labels = stim_types_labels
            
-    def plot_vm_wba_stim_corr(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,15,dtype=int),\
+    def plot_vm_wba_stim_corr(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,20,dtype=int),\
                               vm_lim=[-80,-60],wba_lim=[-45,45],if_save=True,if_x_zoom=True): 
     
         # make figure four rows of signals -- vm, wba, stimulus, vm-wba corr x
         # four columns of stimulus types
         
-        sampling_rate = 10000 # in hertz
+        if self.pin_behavior:
+            sampling_rate = 1000 # in hertz
+            wba_lim=[-1.5,1.5]
+        else:
+            sampling_rate = 10000 # in hertz
+        
         s_iti = .5 * sampling_rate  # ****************** not sure what this is? 
         baseline_win = range(0,int(.5*sampling_rate))  
                 # time relative spot movement start - s_iti
@@ -342,9 +387,9 @@ class Spot_Phys(Phys_Flight):
         #get all traces and detect saccades ______________________________________________
         
         # this step is very slow. for debugging, run this once, pickle, then load
-        # all_fly_traces, all_fly_saccades = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
+        all_fly_traces, all_fly_saccades, = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
         
-        all_fly_traces = pd.read_pickle(self.basename[-15:]+'_all_fly_traces.save')
+        #all_fly_traces = pd.read_pickle(self.basename[-15:]+'_all_fly_traces.save')
         
         fig = plt.figure(figsize=(15,9))  
         gs = gridspec.GridSpec(3,4,height_ratios=[1,1,.1])
@@ -397,27 +442,32 @@ class Spot_Phys(Phys_Flight):
            
                 this_color = scalarMap.to_rgba(i)        
                 
-                # plot Vm signal _____________________________________________________      
-                vm_trace = all_fly_traces.loc[:,('this_fly',tr,cnd,'vm')] 
+                # plot Vm signal _____________________________________________________  
                 
-                if vm_base_subtract:
-                    vm_base = np.nanmean(vm_trace[baseline_win])
-                    vm_trace = vm_trace - vm_base
+                if not self.pin_behavior:
                 
-                non_nan_i = np.where(~np.isnan(vm_trace))[0]  #I shouldn't need these. remove nans earlier. ****************
-                vm_ax.plot(vm_trace[non_nan_i],color=this_color)
+                    vm_trace = all_fly_traces.loc[:,('this_fly',tr,cnd,'vm')] 
                 
-                #filtered_vm_trace = butter_lowpass_filter(vm_trace[non_nan_i],10)
-                #vm_ax.plot(filtered_vm_trace,color=this_color)
+                    if vm_base_subtract:
+                        vm_base = np.nanmean(vm_trace[baseline_win])
+                        vm_trace = vm_trace - vm_base
+                
+                    non_nan_i = np.where(~np.isnan(vm_trace))[0]  #I shouldn't need these. remove nans earlier. ****************
+                    vm_ax.plot(vm_trace[non_nan_i],color=this_color)
+                
+                    #filtered_vm_trace = butter_lowpass_filter(vm_trace[non_nan_i],10)
+                    #vm_ax.plot(filtered_vm_trace,color=this_color)
                 
                 # plot WBA signal ____________________________________________________           
                 wba_trace = all_fly_traces.loc[:,('this_fly',tr,cnd,'lmr')]
-            
+                
                 baseline = np.nanmean(wba_trace[baseline_win])
                 wba_trace = wba_trace - baseline  
-                 
+                
+                #wba_ax.plot(wba_trace,color=this_color)
+             
                 non_nan_i = np.where(~np.isnan(wba_trace))[0]  ##remove nans earlier/check to make sure nans only occur at the end
-                filtered_wba_trace = butter_lowpass_filter(wba_trace[non_nan_i],20)
+                filtered_wba_trace = butter_lowpass_filter(wba_trace[non_nan_i],fs=1000)
                 wba_ax.plot(filtered_wba_trace,color=this_color)
           
                 #now plot stimulus traces ____________________________________________
@@ -441,7 +491,12 @@ class Spot_Phys(Phys_Flight):
             all_wba_ax[col].set_ylim(wba_lim)
             all_stim_ax[col].set_ylim([0,10])
             #all_corr_ax[col].set_ylim([-1,1])
-             
+            
+            # show turn window
+       
+            all_wba_ax[col].axvspan(475, 650, facecolor='grey', alpha=0.5)    
+            
+                     
             # label axes, show xlim and ylim __________________________________________
             
             # remove all time xticklabels
@@ -460,6 +515,7 @@ class Spot_Phys(Phys_Flight):
             all_vm_ax[col].autoscale_view(True,True,True)
             all_vm_ax[col].set_title(self.stim_types_labels[col],fontsize=12)
                 
+            all_wba_ax[col].axhline(color=black)
             
             if col == 0: #label yaxes
             
@@ -467,7 +523,15 @@ class Spot_Phys(Phys_Flight):
                     all_vm_ax[col].set_ylabel('Baseline subtracted Vm (mV)')
                 else:
                     all_vm_ax[col].set_ylabel('Vm (mV)')
-                all_wba_ax[col].set_ylabel('WBA (degrees)')
+                    
+                if self.pin_behavior:    
+                    all_wba_ax[col].set_ylabel('L-R WBA (V)')
+                
+                else:
+                    all_wba_ax[col].set_ylabel('WBA (degrees)')
+                
+                
+                
                 all_stim_ax[col].set_ylabel('Stim (frame)')
                 #all_stim_ax[col].set_yticks([])
                 
@@ -568,8 +632,88 @@ class Spot_Phys(Phys_Flight):
                     plt.plot(all_fly_traces.loc[:,('this_fly',tr,cnd,'ystim')])
     
     
+    def get_flight_over_time(self,title_txt='',wba_lim=[-1.5,1.5],if_save=True): 
+        # clean this up --
+        # first store all points by vectorizing
+        # change from plot -> get with boolean for plotting
+        # make a separate function for plotting the population change over time
+        #
+        # this seems to work well, but I need to to show the windows of the saccades
+        
+        
+        
+        sampling_rate = 1000            # in hertz ********* move to fly info
+        s_iti = .25 * sampling_rate      # ********* move to fly info
+        
+        baseline_win = range(0,int(s_iti)) 
+        
+        #get all traces and detect saccades ______________________________________________
+        all_fly_traces, all_fly_saccades = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
+
+        wba_trace = all_fly_traces.loc[:,('this_fly',slice(None),slice(None),'lmr')]
+        baseline = np.nanmean(wba_trace.loc[range(0,250),:],0)
+        turn_win_mean = np.nanmean(wba_trace.loc[range(475,650),:]) - baseline  
+
+        #get corresponding tr#, cnd
+        tr_cnds = all_fly_traces.loc[:,('this_fly',slice(None),slice(None),'lmr')].columns.get_level_values(2)
+     
+        return turn_win_mean, tr_cnds
+     
+    
+    def plot_flight_over_time(self,title_txt='',wba_lim=[-1.5,1.5],if_save=True): 
+        # clean this up --
+        # first store all points by vectorizing
+        # change from plot -> get with boolean for plotting
+        # make a separate function for plotting the population change over time
+        #
+        # this seems to work well, but I need to to show the windows of the saccades
+        
+        
+        
+        sampling_rate = 1000            # in hertz ********* move to fly info
+        s_iti = .25 * sampling_rate      # ********* move to fly info
+        
+        baseline_win = range(0,int(s_iti)) 
+        
+        #get all traces and detect saccades ______________________________________________
+        all_fly_traces, all_fly_saccades = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
+
+        fig = plt.figure(figsize=(9.5,11.5))       #(16.5, 9))
+        
+        cnds_to_plot = np.unique(self.stim_types) #[2,3,0,1]
+        print cnds_to_plot
+        all_colors = [blue,magenta,green,black]
+         
+        for cnd,cnd_i in zip(cnds_to_plot,range(np.size(cnds_to_plot))):
+            # now loop through the trials/cnd
+            this_cnd_tr_ns = all_fly_traces.loc[:,('this_fly',slice(None),cnd,'lmr')].columns.get_level_values(1).tolist()
+            
+            this_color = all_colors[cnd_i]
+            
+            for tr_n, i in zip(this_cnd_tr_ns,range(np.size(this_cnd_tr_ns))):
+                wba_trace = all_fly_traces.loc[:,('this_fly',tr_n,slice(None),'lmr')]
+                
+                baseline = np.nanmean(wba_trace.loc[baseline_win,:])
+                turn_win = np.nanmean(wba_trace.loc[range(475,650),:]) - baseline  
+         
+                plt.plot(tr_n,turn_win,'.',markersize=12,color=this_color)
+                plt.axhline(linewidth=.5, color=black)
+                
+        plt.xlabel('Trial number')
+        plt.ylabel('L-R WBA in turn window')  
+        plt.title(title_txt,fontsize=18)  
+        plt.ylim([-1.5,1.5])
+        
+        for cnd in range(np.size(cnds_to_plot)):
+            fig.text(.7,.85-.03*cnd,self.stim_types_labels[cnd],color=all_colors[cnds_to_plot[cnd]],fontsize=14) 
+        
+        if if_save:
+            saveas_path = '/Users/jamie/bin/figures/'
+            plt.savefig(saveas_path + title_txt + '_turn_adaptation.png',\
+                                    bbox_inches='tight',dpi=100) 
+    
                    
-    def get_traces_by_stim(self,fly_name='this_fly',iti=25000,get_saccades=False):
+    def get_traces_by_stim(self,fly_name='this_fly',iti=5000,get_saccades=False):
     #here extract the traces for each of the stimulus times. 
     #align to looming start, and add the first pre stim and post stim intervals
     #here return a data frame of lwa and rwa wing traces
@@ -734,7 +878,7 @@ def butter_lowpass(cutoff, fs, order=5):
     b, a = sp.signal.butter(order, normal_cutoff, btype='low', analog=False)
     return b, a
 
-def butter_lowpass_filter(data, cutoff=6, fs=10000, order=5): #how does the order change?
+def butter_lowpass_filter(data, cutoff=12, fs=10000, order=5): #how does the order change?
     b, a = butter_lowpass(cutoff, fs, order)
     #y = sp.signal.lfilter(b, a, data) #what's the difference here? 
     y = sp.signal.filtfilt(b, a, data)
@@ -1144,5 +1288,71 @@ def plot_pop_flight_behavior_means_overlay(population_df, two_genotypes, wba_lim
         + two_genotypes[0] + '_' + two_genotypes[1] + '.png',dpi=100)
     #plt.close('all')
 
+def plot_pop_flight_over_time(all_fnames,title_txt='',wba_lim=[-1.5,1.5],if_save=False): 
+        # clean this up --
+        # first store all points by vectorizing
+        # change from plot -> get with boolean for plotting
+        # make a separate function for plotting the population change over time
+        #
+        # this seems to work well, but I need to to show the windows of the saccades
+        
+        #get all traces and detect saccades ______________________________________________
+        
+        
+        behavior_path = '/Users/jamie/Dropbox/maimon lab - behavioral data/'
+        fig = plt.figure(figsize=(9.5,11.5))       #(16.5, 9))
+        
+        cnds_to_plot = range(4)
+        all_colors = [blue,magenta,green,black]
+        
+        n_flies = np.size(all_fnames)
+        print n_flies
+        n_cnds = 4
+        max_trs = 150
+        
+        fly_traces_by_cnd = np.nan*np.ones([n_flies,n_cnds,max_trs])
+         
+        for f_name,fly_i in zip(all_fnames,range(n_flies)): #each fly
+            # fly init
+            # get fly conditions and traces
+            
+            fly = Spot_Phys(behavior_path + f_name,True)
+            fly.process_fly()
+            lmr_avg, cnd_types = fly.get_flight_over_time()
 
+            
+            for cnd in cnds_to_plot:
+                this_cnd_trs = np.where(cnd_types == cnd)[0]
+                n_trs = np.size(this_cnd_trs)
+                this_color = all_colors[cnd]
+                plt.plot(range(n_trs),lmr_avg[this_cnd_trs],'-',color=this_color)
+        
+            
+                #save all means/fly
+                fly_traces_by_cnd[fly_i,cnd,range(0,n_trs)] = lmr_avg[this_cnd_trs]
+        
+        for cnd in cnds_to_plot:
+            plt.plot(np.nanmean(fly_traces_by_cnd,0)[cnd],color=all_colors[cnd],linewidth=4)
+            
+        plt.axhline(linewidth=.5, color=black)
+                
+        plt.xlabel('Trial number')
+        plt.ylabel('L-R WBA in turn window')  
+        plt.title(title_txt,fontsize=18)  
+        plt.ylim([-1.5,1.5])
+        
+        stim_types_labels = np.asarray(['Spot on right, front to back',\
+                                        'Spot on right, back to front',\
+                                        'Spot on left, front to back',\
+                                        'Spot on left, back to front'])
+        
+        for cnd in range(np.size(cnds_to_plot)):
+            fig.text(.7,.85-.03*cnd,stim_types_labels[cnd],color=all_colors[cnds_to_plot[cnd]],fontsize=14) 
+        
+        if if_save:
+            saveas_path = '/Users/jamie/bin/figures/'
+            plt.savefig(saveas_path + title_txt + 'population_turn_adaptation.png',\
+                                    bbox_inches='tight',dpi=100) 
+        
+        return fly_traces_by_cnd
     
