@@ -367,7 +367,7 @@ class Spot_Phys(Phys_Flight):
         self.stim_types = stim_types  #change to integer, although nans are also useful
         self.stim_types_labels = stim_types_labels
            
-    def plot_vm_wba_stim_corr(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,20,dtype=int),\
+    def plot_vm_wba_stim_corr(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,30,dtype=int),\
                               vm_lim=[-80,-60],wba_lim=[-45,45],if_save=True,if_x_zoom=True): 
     
         # make figure four rows of signals -- vm, wba, stimulus, vm-wba corr x
@@ -583,6 +583,196 @@ class Spot_Phys(Phys_Flight):
                 plt.savefig(saveas_path + figure_txt + '_' + tr_txt + '_fast_spot_vm_wings.png',\
                 bbox_inches='tight',dpi=100) 
             #plt.close('all')
+            
+    def plot_wba_stim(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,3,dtype=int),\
+                        wba_lim=[-45,45],if_save=True,if_x_zoom=True): 
+    
+        # just plot wba and stim
+        # four columns of stimulus types
+        
+        if self.pin_behavior:
+            sampling_rate = 1000 # in hertz
+            wba_lim=[-1.5,1.5]
+        else:
+            sampling_rate = 10000 # in hertz
+        
+        s_iti = .5 * sampling_rate #does the sampling rate difference change this? 
+        baseline_win = range(0,int(s_iti))  
+                # time relative spot movement start - s_iti
+                # do not average out the visual onset
+        
+        #get all traces and detect saccades ______________________________________________
+        
+        # this step is very slow. for debugging, run this once, pickle, then load
+        all_fly_traces, all_fly_saccades, = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
+        
+        #all_fly_traces = pd.read_pickle(self.basename[-15:]+'_all_fly_traces.save')
+        
+        fig = plt.figure(figsize=(15,9))  
+        gs = gridspec.GridSpec(2,4,height_ratios=[1,1,.1])
+        gs.update(wspace=0.025, hspace=0.05) # set the spacing between axes. 
+    
+        #store all subplots for formatting later           
+        all_wba_ax = []
+        all_stim_ax = []
+        
+        cnds_to_plot = range(4)
+        
+        # now loop through the conditions/columns. ____________________________________
+        # the signal types are encoded in separate rows(vm, wba, stim, corr)
+        for cnd, grid_col in zip(cnds_to_plot,range(4)):
+        
+            this_cnd_trs = all_fly_traces.loc[:,('this_fly',slice(None),cnd,'lmr')].columns.get_level_values(1)
+            n_all_reps = np.size(this_cnd_trs)
+            subset_to_plot = this_cnd_trs[subset_is]
+            if cnd == 0: 
+                tr_txt = 'trs ' + str(subset_is[0]) + '-' + str(subset_is[-1]) + ' of ' +str(n_all_reps)
+                fig.text(.005,.85,tr_txt,fontsize=12)
+        
+            n_cnd_trs = np.size(subset_to_plot)
+            
+            # get colormap info ______________________________________________________
+            cmap = plt.cm.get_cmap('jet') #get a better colormap.m jet's luminance changes are confusing. **********
+            cNorm  = colors.Normalize(0,n_cnd_trs)
+            scalarMap = cm.ScalarMappable(norm=cNorm, cmap=cmap)
+        
+            # create subplots ________________________________________________________              
+            if grid_col == 0:
+                wba_ax = plt.subplot(gs[1,grid_col], sharex=vm_ax) 
+                stim_ax = plt.subplot(gs[2,grid_col],sharex=vm_ax)    
+            else:
+                wba_ax = plt.subplot(gs[1,grid_col], sharex=vm_ax,sharey=all_wba_ax[0]) 
+                stim_ax = plt.subplot(gs[2,grid_col],sharex=vm_ax,sharey=all_stim_ax[0])    
+            all_vm_ax.append(vm_ax)   #can I preallocate the size here? data types? *****************
+            all_wba_ax.append(wba_ax) 
+            all_stim_ax.append(stim_ax)
+            
+            # loop single trials and plot all signals ________________________________
+            for tr, i in zip(subset_to_plot,range(n_cnd_trs)):
+           
+                this_color = scalarMap.to_rgba(i)        
+                
+                # plot WBA signal ____________________________________________________           
+                wba_trace = all_fly_traces.loc[:,('this_fly',tr,cnd,'lmr')]
+                
+                baseline = np.nanmean(wba_trace[baseline_win])
+                wba_trace = wba_trace - baseline  
+                
+                #wba_ax.plot(wba_trace,color=this_color)
+             
+                non_nan_i = np.where(~np.isnan(wba_trace))[0]  ##remove nans earlier/check to make sure nans only occur at the end
+                filtered_wba_trace = butter_lowpass_filter(wba_trace[non_nan_i],fs=1000)
+                wba_ax.plot(filtered_wba_trace,color=this_color)
+          
+                #now plot stimulus traces ____________________________________________
+                stim_ax.plot(all_fly_traces.loc[:,('this_fly',tr,cnd,'xstim')],color=this_color)
+                              
+            
+        # now format all subplots _____________________________________________________  
+        
+        # loop though all columns again, format each row ______________________________
+        for col, cnd in zip(range(4),cnds_to_plot):      
+            #create shaded regions of baseline vm and saccade time ___________________
+            baseline_min_t = baseline_win[0]
+            baseline_max_t = baseline_win[-1]
+            all_wba_ax[col].axvspan(baseline_min_t, baseline_max_t, facecolor='grey', alpha=0.5)    
+                
+                     
+            # set the ylim for the stimulus and correlation rows ______________________
+            all_wba_ax[col].set_ylim(wba_lim)
+            all_stim_ax[col].set_ylim([0,10])
+            
+            # show turn window
+            all_wba_ax[col].axvspan(475, 650, facecolor='grey', alpha=0.5)     
+                                        # check this number mapping. what axis is it using? 
+                                        # change my code to rescale the axis later
+                     
+            # label axes, show xlim and ylim __________________________________________
+            
+            # remove all time xticklabels
+            all_vm_ax[col].tick_params(labelbottom='off')
+            all_wba_ax[col].tick_params(labelbottom='off')
+            all_stim_ax[col].tick_params(labelbottom='off')
+            #all_corr_ax[col].tick_params(labelbottom='off')
+            
+            if if_x_zoom:
+                all_vm_ax[col].set_xlim([0,1*sampling_rate])
+            #else:
+            #    all_vm_ax[col].set_xlim([0,max_t])
+            
+            
+            all_vm_ax[col].relim()
+            all_vm_ax[col].autoscale_view(True,True,True)
+            all_vm_ax[col].set_title(self.stim_types_labels[col],fontsize=12)
+                
+            all_wba_ax[col].axhline(color=black)
+            
+            if col == 0: #label yaxes
+            
+                if vm_base_subtract:
+                    all_vm_ax[col].set_ylabel('Baseline subtracted Vm (mV)')
+                else:
+                    all_vm_ax[col].set_ylabel('Vm (mV)')
+                    
+                if self.pin_behavior:    
+                    all_wba_ax[col].set_ylabel('L-R WBA (V)')
+                
+                else:
+                    all_wba_ax[col].set_ylabel('WBA (degrees)')
+                
+                
+                
+                all_stim_ax[col].set_ylabel('Stim (frame)')
+                #all_stim_ax[col].set_yticks([])
+                
+                #all_corr_ax[col].set_ylabel('Corr(Vm, WBA)')
+                
+                vm_ax_ylim = all_vm_ax[col].get_ylim()
+                all_vm_ax[col].set_yticks([vm_ax_ylim[0],0,vm_ax_ylim[1]])
+                
+                wba_ax_ylim = all_wba_ax[col].get_ylim()
+                all_wba_ax[col].set_yticks([wba_ax_ylim[0],0,wba_ax_ylim[1]])
+                
+                stim_ax_lim = all_stim_ax[col].get_ylim()
+                all_stim_ax[col].set_yticks([stim_ax_lim[0],0,stim_ax_lim[1]])
+                
+                # label time x axis for just col 0 ______________________
+                # divide by sampling rate _______________________________
+                def div_sample_rate(x, pos): 
+                    #The two args are the value and tick position 
+                    return (x-s_iti)/sampling_rate
+                    
+                formatter = FuncFormatter(div_sample_rate) 
+                all_stim_ax[col].xaxis.set_major_formatter(formatter)
+                                    
+                all_stim_ax[col].tick_params(labelbottom='on')
+                all_stim_ax[col].set_xlabel('Time from spot movement (s)') 
+
+            else: # remove all ylabels 
+                all_vm_ax[col].tick_params(labelleft='off')
+                all_wba_ax[col].tick_params(labelleft='off')
+                all_stim_ax[col].tick_params(labelleft='off')
+                #all_corr_ax[col].tick_params(labelleft='off')
+              
+        #now annotate stimulus positions, title ______________________________________      
+        #fig.text(.775,.905,'Right',fontsize=14)
+        
+        figure_txt = title_txt
+        fig.text(.425,.95,figure_txt,fontsize=18) 
+        
+        #fig.text(.05,.95,tr_info_str,fontsize=14) 
+               
+        plt.draw()
+        
+        if if_save:
+            saveas_path = '/Users/jamie/bin/figures/'
+            if if_x_zoom:
+                plt.savefig(saveas_path + figure_txt + '_' + tr_txt + '_fast_spot_vm_wings_zoomed.png',\
+                bbox_inches='tight',dpi=100) 
+            else:
+                plt.savefig(saveas_path + figure_txt + '_' + tr_txt + '_fast_spot_vm_wings.png',\
+                bbox_inches='tight',dpi=100) 
+            #plt.close('all')
              
     def plot_each_tr_saccade(self,l_div_v_list=[0],
         wba_lim=[-45,45]): 
@@ -641,8 +831,15 @@ class Spot_Phys(Phys_Flight):
         # this seems to work well, but I need to to show the windows of the saccades
         
         
-        
-        sampling_rate = 1000            # in hertz ********* move to fly info
+        if self.pin_behavior: 
+            sampling_rate = 1000            # in hertz ********* move to fly info
+            baseline_win = range(0,250)
+            turn_win = range(475,650)
+        else:
+            sampling_rate = 10000
+            baseline_win = range(0,2500)
+            turn_win = range(4750,6500)
+            
         s_iti = .25 * sampling_rate      # ********* move to fly info
         
         baseline_win = range(0,int(s_iti)) 
@@ -651,8 +848,8 @@ class Spot_Phys(Phys_Flight):
         all_fly_traces, all_fly_saccades = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
 
         wba_trace = all_fly_traces.loc[:,('this_fly',slice(None),slice(None),'lmr')]
-        baseline = np.nanmean(wba_trace.loc[range(0,250),:],0)
-        turn_win_mean = np.nanmean(wba_trace.loc[range(475,650),:]) - baseline  
+        baseline = np.nanmean(wba_trace.loc[baseline_win,:],0)
+        turn_win_mean = np.nanmean(wba_trace.loc[turn_win,:],0) - baseline  
 
         #get corresponding tr#, cnd
         tr_cnds = all_fly_traces.loc[:,('this_fly',slice(None),slice(None),'lmr')].columns.get_level_values(2)
@@ -669,9 +866,18 @@ class Spot_Phys(Phys_Flight):
         # this seems to work well, but I need to to show the windows of the saccades
         
         
-        
-        sampling_rate = 1000            # in hertz ********* move to fly info
-        s_iti = .25 * sampling_rate      # ********* move to fly info
+        if self.pin_behavior: 
+            sampling_rate = 1000            # in hertz ********* move to fly info
+            s_iti = .25 * sampling_rate
+            baseline_win = range(0,250)
+            turn_win = np.arange(475,650)+s_iti
+        else:
+            sampling_rate = 10000
+            s_iti = .25 * sampling_rate
+            baseline_win = range(0,2500)
+            turn_win = np.arange(4750,6500)+s_iti
+            
+          
         
         baseline_win = range(0,int(s_iti)) 
         
@@ -693,16 +899,18 @@ class Spot_Phys(Phys_Flight):
             for tr_n, i in zip(this_cnd_tr_ns,range(np.size(this_cnd_tr_ns))):
                 wba_trace = all_fly_traces.loc[:,('this_fly',tr_n,slice(None),'lmr')]
                 
-                baseline = np.nanmean(wba_trace.loc[baseline_win,:])
-                turn_win = np.nanmean(wba_trace.loc[range(475,650),:]) - baseline  
+                baseline = np.nanmean(wba_trace.loc[baseline_win,:],0)
+                turn_win_mean = np.nanmean(wba_trace.loc[turn_win,:],0) - baseline 
+                
+            
          
-                plt.plot(tr_n,turn_win,'.',markersize=12,color=this_color)
+                plt.plot(tr_n,turn_win_mean,'.',markersize=12,color=this_color)
                 plt.axhline(linewidth=.5, color=black)
                 
         plt.xlabel('Trial number')
         plt.ylabel('L-R WBA in turn window')  
         plt.title(title_txt,fontsize=18)  
-        plt.ylim([-1.5,1.5])
+        #plt.ylim([-1.5,1.5])
         
         for cnd in range(np.size(cnds_to_plot)):
             fig.text(.7,.85-.03*cnd,self.stim_types_labels[cnd],color=all_colors[cnds_to_plot[cnd]],fontsize=14) 
@@ -1288,7 +1496,7 @@ def plot_pop_flight_behavior_means_overlay(population_df, two_genotypes, wba_lim
         + two_genotypes[0] + '_' + two_genotypes[1] + '.png',dpi=100)
     #plt.close('all')
 
-def plot_pop_flight_over_time(all_fnames,title_txt='',wba_lim=[-1.5,1.5],if_save=False): 
+def plot_pop_flight_over_time(all_fnames,if_pin=False,title_txt='',wba_lim=[-1.5,1.5],if_save=True): 
         # clean this up --
         # first store all points by vectorizing
         # change from plot -> get with boolean for plotting
@@ -1316,7 +1524,7 @@ def plot_pop_flight_over_time(all_fnames,title_txt='',wba_lim=[-1.5,1.5],if_save
             # fly init
             # get fly conditions and traces
             
-            fly = Spot_Phys(behavior_path + f_name,True)
+            fly = Spot_Phys(behavior_path + f_name,if_pin)
             fly.process_fly()
             lmr_avg, cnd_types = fly.get_flight_over_time()
 
@@ -1339,7 +1547,7 @@ def plot_pop_flight_over_time(all_fnames,title_txt='',wba_lim=[-1.5,1.5],if_save
         plt.xlabel('Trial number')
         plt.ylabel('L-R WBA in turn window')  
         plt.title(title_txt,fontsize=18)  
-        plt.ylim([-1.5,1.5])
+        #plt.ylim([-1.5,1.5])
         
         stim_types_labels = np.asarray(['Spot on right, front to back',\
                                         'Spot on right, back to front',\
