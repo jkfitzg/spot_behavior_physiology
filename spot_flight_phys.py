@@ -31,96 +31,90 @@ class Phys_Flight():
             self.fname = self.basename + '.abf'  #check here for fname type 
         
         self.pin_behavior = pin_behavior
-                  
+        if self.pin_behavior:
+            self.sampling_rate = 1000
+        else:
+            self.sampling_rate = 10000
+                      
     def open_abf(self,exclude_indicies=[]):        
         abf = read_abf(self.fname)              
         
         if self.pin_behavior: #different channels here, although same file structures
-            n_indicies = np.size(abf['stim_x']) #assume all channels have the same sample #s 
+            n_indicies = np.size(abf['stim_x'])      #assume all channels have the same sample #s 
             inc_indicies = np.setdiff1d(range(n_indicies),exclude_indicies);
                    
             self.xstim = np.array(abf['stim_x'])[inc_indicies]
             self.ystim = np.array(abf['stim_y'])[inc_indicies]
 
-            self.samples = np.arange(self.xstim.size)  #this is adjusted
-            self.t = self.samples/float(1000) # sampled at 1,000 hz -- encode here?
- 
-            #now process wing signal
-            lwa_v = np.array(abf['l_wba'])[inc_indicies]
-            rwa_v = np.array(abf['r_wba'])[inc_indicies]
-        
-            self.lwa = lwa_v
-            self.rwa = rwa_v
-        
-            lmr = self.lwa - self.rwa
-            self.raw_lmr = lmr
-            self.lmr = lmr
+            # no wing processing
+            self.lwa = np.array(abf['l_wba'])[inc_indicies]
+            self.rwa = np.array(abf['r_wba'])[inc_indicies]
         
             self.ao = np.array(abf['ao1'])[inc_indicies]
         
-            self.vm = np.nan*np.ones_like(lmr)    #empty
-            self.tach = np.array([])  #empty
-            self.n_nonflight_trs = 0 #will update
+            self.vm = np.nan*np.ones_like(lmr)    #empty, although this is a hack. **
+            self.tach = np.array([])              #empty
             
         else:
-        
-            # added features to exclude specific time intervals
             n_indicies = np.size(abf['x_ch']) #assume all channels have the same sample #s 
             inc_indicies = np.setdiff1d(range(n_indicies),exclude_indicies);
                
             self.xstim = np.array(abf['x_ch'])[inc_indicies]
             self.ystim = np.array(abf['y_ch'])[inc_indicies]
 
-            self.samples = np.arange(self.xstim.size)  #this is adjusted
-            self.t = self.samples/float(10000) # sampled at 10,000 hz -- encode here?
-
-            #now process wing signal
+            # process wing signal
             lwa_v = np.array(abf['wba_l'])[inc_indicies]
-            rwa_v = np.array(abf['wba_r'])[inc_indicies]
-    
+            rwa_v = np.array(abf['wba_r'])[inc_indicies]    
             self.lwa = process_wings(lwa_v)
             self.rwa = process_wings(rwa_v)
-    
-            lmr = self.lwa - self.rwa
-            self.raw_lmr = lmr
-            self.lmr = lmr
     
             self.ao = np.array(abf['patid'])[inc_indicies]
     
             self.vm = np.array(abf['vm'])[inc_indicies] - 13 #offset for bridge potential
             self.tach = np.array(abf['tach'])[inc_indicies]
-            self.n_nonflight_trs = 0 #will update
+        
+        # common to both versions    
+        self.samples = np.arange(self.xstim.size)  
+        self.t = self.samples/float(self.sampling_rate)
+
+        self.lmr = self.lwa - self.rwa
+        
+        self.iti_s = .5         # later change this for the 5 ms iti trials
+                    
+    def _is_flying(self, start_i, stop_i, percent_thres = .90):  
+        # 18 march 2015 -- I need to update this for pin tethered flies
+        # now it depends on the tachometers    
     
+        if self.pin_behavior: 
+            print 'I need to fork pin-tethered flight detection'
+            return True
+        else:
+            # check that animal is flying using the tachometer signal
+            # iterate through the trace in steps of 25 ms (250 with typical 10,000 sampling rate)
+            # min flight rate of interest = 100 wing beats/s
         
+            tach_range_thres = 1.5 #2
+            stroke_range_thres = 1
+            step_size = 350 #250
+            i_steps = range(start_i,stop_i,step_size)
+            n_tests = np.size(i_steps)
+            flight_tests = np.ones(n_tests, dtype=bool)    
         
+            #check tachometer, but also make sure flight track is on. 
+            for interval_start,test_i in zip(i_steps,range(n_tests)):
+                interval = np.arange(interval_start,(interval_start+step_size))
+                interval_min = np.min(self.tach[interval])
+                interval_max = np.max(self.tach[interval])
+                stroke_min = np.min(self.lmr[interval])
+                stroke_max = np.max(self.lmr[interval])
             
-    def _is_flying(self, start_i, stop_i, percent_thres = .90):  #fix this critera
-        #check that animal is flying using the tachometer signal
-     
-        #iterate through the trace in steps of 25 ms (250 with typical 10,000 sampling rate)
-        #min flight rate of interest = 100 wing beats/s
-        tach_range_thres = 1.5 #2
-        stroke_range_thres = 1
-        step_size = 350 #250
-        i_steps = range(start_i,stop_i,step_size)
-        n_tests = np.size(i_steps)
-        flight_tests = np.ones(n_tests, dtype=bool)    
-        
-        #check tachometer, but also make sure flight track is on. 
-        for interval_start,test_i in zip(i_steps,range(n_tests)):
-            interval = np.arange(interval_start,(interval_start+step_size))
-            interval_min = np.min(self.tach[interval])
-            interval_max = np.max(self.tach[interval])
-            stroke_min = np.min(self.lmr[interval])
-            stroke_max = np.max(self.lmr[interval])
+                tach_flight = (interval_max - interval_min) > tach_range_thres
+                stroke_flight = (stroke_max - stroke_min) > stroke_range_thres
             
-            tach_flight = (interval_max - interval_min) > tach_range_thres
-            stroke_flight = (stroke_max - stroke_min) > stroke_range_thres
-            
-            flight_tests[test_i] = tach_flight and stroke_flight
+                flight_tests[test_i] = tach_flight and stroke_flight
         
-        is_flying = np.nanmean(flight_tests) > percent_thres 
-        return is_flying
+            is_flying = np.nanmean(flight_tests) > percent_thres 
+            return is_flying
         
            
 #---------------------------------------------------------------------------#
@@ -129,11 +123,14 @@ class Spot_Phys(Phys_Flight):
     
     def process_fly(self,ex_i=[]):  #does this interfere with the Flight_Phys init?
         self.open_abf(ex_i)
-        self.clean_lmr_signal()
+        if not self.pin_behavior:
+            self.clean_lmr_signal()
         self.parse_trial_times()
         self.parse_stim_type()
         
     def show_nonflight_exclusion(self,title_txt=''):
+        # now only works for plate-tethered flies
+    
         fig = plt.figure(figsize=(17.5,4.5))
         plt.title(title_txt)
         
@@ -161,6 +158,8 @@ class Spot_Phys(Phys_Flight):
         plt.savefig(saveas_path + title_txt + '_nonflight exclusion.png',bbox_inches='tight',dpi=100) 
         
     def clean_lmr_signal(self,title_txt='',if_plot=False):
+    # only works for plate tethered flies
+    
         lmr = np.copy(self.lmr)
         cleaned_lmr = np.copy(lmr) # make a copy here
         
@@ -309,25 +308,12 @@ class Spot_Phys(Phys_Flight):
         #detect when the y stim stepped
         ystim_diff = np.diff(self.ystim)
         y_step = self.samples[np.where(ystim_diff > .03)]
-
-        ##now discriminate first stim on for a trial, not looming steps
-        #pre_loom_stim = np.zeros(n_trs)
-        #for tr_i in range(n_trs):
-        #    earliest_t = clean_tr_starts[tr_i] - 2000  #look within a window before looming
-        #    latest_t = clean_tr_starts[tr_i] - 300 
-        #    win1 = np.where(y_step > earliest_t)[0]
-        #    win2 = np.where(y_step < latest_t)[0]
-        #    candidate_stim_starts = y_step[np.intersect1d(win1,win2)]
-        #    pre_loom_stim[tr_i] = candidate_stim_starts[0]
-        
-        #next encode post loom stim on, iti_dur as the median
-        
+ 
         self.n_trs = n_trs 
         self.tr_starts = clean_tr_starts  #index values of starting and stopping
         self.tr_stops = clean_tr_stops
-        #self.pre_loom_stim_ons = pre_loom_stim
         
-        #here remove all trials in which the fly is not flying. 
+        ## here remove all trials in which the fly is not flying. 
         #self.remove_non_flight_trs()
         
     def parse_stim_type(self):
@@ -584,39 +570,43 @@ class Spot_Phys(Phys_Flight):
                 bbox_inches='tight',dpi=100) 
             #plt.close('all')
             
-    def plot_wba_stim(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,3,dtype=int),\
-                        wba_lim=[-45,45],if_save=True,if_x_zoom=True): 
+    
+    def plot_wba_stim(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,25,dtype=int),\
+                        if_save=True,if_x_zoom=True): 
     
         # just plot wba and stim
         # four columns of stimulus types
         
         if self.pin_behavior:
-            sampling_rate = 1000 # in hertz
             wba_lim=[-1.5,1.5]
         else:
-            sampling_rate = 10000 # in hertz
+            wba_lim=[-45,45]
         
-        s_iti = .5 * sampling_rate #does the sampling rate difference change this? 
-        baseline_win = range(0,int(s_iti))  
-                # time relative spot movement start - s_iti
-                # do not average out the visual onset
+        iti_timepoints = self.iti_s * self.sampling_rate  
+        baseline_win = range(0,int(iti_timepoints/2)) 
         
+        turn_start = -.05 # time in seconds relative spot movement start
+        turn_stop = .1
+        scaled_turn_start = int(turn_start*self.sampling_rate + iti_timepoints)
+        scaled_turn_stop = int(turn_stop*self.sampling_rate + iti_timepoints)
+        
+        turn_win = np.arange(scaled_turn_start,scaled_turn_stop,dtype=int)
+               
         #get all traces and detect saccades ______________________________________________
         
         # this step is very slow. for debugging, run this once, pickle, then load
-        all_fly_traces, all_fly_saccades, = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
-        
+        all_fly_traces, all_fly_saccades, = self.get_traces_by_stim('this_fly',iti_timepoints,get_saccades=False)
         #all_fly_traces = pd.read_pickle(self.basename[-15:]+'_all_fly_traces.save')
         
         fig = plt.figure(figsize=(15,9))  
-        gs = gridspec.GridSpec(2,4,height_ratios=[1,1,.1])
+        gs = gridspec.GridSpec(2,4,height_ratios=[1,.2])
         gs.update(wspace=0.025, hspace=0.05) # set the spacing between axes. 
     
         #store all subplots for formatting later           
         all_wba_ax = []
         all_stim_ax = []
         
-        cnds_to_plot = range(4)
+        cnds_to_plot = range(4) # later change this to absolute stimulus displays
         
         # now loop through the conditions/columns. ____________________________________
         # the signal types are encoded in separate rows(vm, wba, stim, corr)
@@ -632,19 +622,19 @@ class Spot_Phys(Phys_Flight):
             n_cnd_trs = np.size(subset_to_plot)
             
             # get colormap info ______________________________________________________
-            cmap = plt.cm.get_cmap('jet') #get a better colormap.m jet's luminance changes are confusing. **********
+            cmap = plt.cm.get_cmap('seismic') # use a sequential colormap here. jet is bad.
             cNorm  = colors.Normalize(0,n_cnd_trs)
             scalarMap = cm.ScalarMappable(norm=cNorm, cmap=cmap)
         
             # create subplots ________________________________________________________              
             if grid_col == 0:
-                wba_ax = plt.subplot(gs[1,grid_col], sharex=vm_ax) 
-                stim_ax = plt.subplot(gs[2,grid_col],sharex=vm_ax)    
+                wba_ax = plt.subplot(gs[0,grid_col]) 
+                stim_ax = plt.subplot(gs[1,grid_col],sharex=wba_ax)    
             else:
-                wba_ax = plt.subplot(gs[1,grid_col], sharex=vm_ax,sharey=all_wba_ax[0]) 
-                stim_ax = plt.subplot(gs[2,grid_col],sharex=vm_ax,sharey=all_stim_ax[0])    
-            all_vm_ax.append(vm_ax)   #can I preallocate the size here? data types? *****************
-            all_wba_ax.append(wba_ax) 
+                wba_ax = plt.subplot(gs[0,grid_col], sharex=all_wba_ax[0],sharey=all_wba_ax[0]) 
+                stim_ax = plt.subplot(gs[1,grid_col],sharex=all_wba_ax[0],sharey=all_stim_ax[0])  
+                  
+            all_wba_ax.append(wba_ax) # change to preallocated axes, not append
             all_stim_ax.append(stim_ax)
             
             # loop single trials and plot all signals ________________________________
@@ -658,10 +648,10 @@ class Spot_Phys(Phys_Flight):
                 baseline = np.nanmean(wba_trace[baseline_win])
                 wba_trace = wba_trace - baseline  
                 
-                #wba_ax.plot(wba_trace,color=this_color)
+                #wba_ax.plot(wba_trace,color=this_color)   # add a boolean for filtering
              
                 non_nan_i = np.where(~np.isnan(wba_trace))[0]  ##remove nans earlier/check to make sure nans only occur at the end
-                filtered_wba_trace = butter_lowpass_filter(wba_trace[non_nan_i],fs=1000)
+                filtered_wba_trace = butter_lowpass_filter(wba_trace[non_nan_i],fs=self.sampling_rate)
                 wba_ax.plot(filtered_wba_trace,color=this_color)
           
                 #now plot stimulus traces ____________________________________________
@@ -682,53 +672,36 @@ class Spot_Phys(Phys_Flight):
             all_wba_ax[col].set_ylim(wba_lim)
             all_stim_ax[col].set_ylim([0,10])
             
+            
             # show turn window
-            all_wba_ax[col].axvspan(475, 650, facecolor='grey', alpha=0.5)     
+            all_wba_ax[col].axvspan(scaled_turn_start, scaled_turn_stop, facecolor='grey', alpha=0.5)     
                                         # check this number mapping. what axis is it using? 
                                         # change my code to rescale the axis later
                      
             # label axes, show xlim and ylim __________________________________________
             
             # remove all time xticklabels
-            all_vm_ax[col].tick_params(labelbottom='off')
             all_wba_ax[col].tick_params(labelbottom='off')
             all_stim_ax[col].tick_params(labelbottom='off')
             #all_corr_ax[col].tick_params(labelbottom='off')
             
-            if if_x_zoom:
-                all_vm_ax[col].set_xlim([0,1*sampling_rate])
-            #else:
-            #    all_vm_ax[col].set_xlim([0,max_t])
             
             
-            all_vm_ax[col].relim()
-            all_vm_ax[col].autoscale_view(True,True,True)
-            all_vm_ax[col].set_title(self.stim_types_labels[col],fontsize=12)
+            all_wba_ax[col].relim()
+            all_wba_ax[col].autoscale_view(True,True,True)
+            all_wba_ax[col].set_title(self.stim_types_labels[col],fontsize=12)
                 
             all_wba_ax[col].axhline(color=black)
             
             if col == 0: #label yaxes
-            
-                if vm_base_subtract:
-                    all_vm_ax[col].set_ylabel('Baseline subtracted Vm (mV)')
-                else:
-                    all_vm_ax[col].set_ylabel('Vm (mV)')
-                    
+                
                 if self.pin_behavior:    
                     all_wba_ax[col].set_ylabel('L-R WBA (V)')
-                
                 else:
                     all_wba_ax[col].set_ylabel('WBA (degrees)')
                 
-                
-                
                 all_stim_ax[col].set_ylabel('Stim (frame)')
-                #all_stim_ax[col].set_yticks([])
                 
-                #all_corr_ax[col].set_ylabel('Corr(Vm, WBA)')
-                
-                vm_ax_ylim = all_vm_ax[col].get_ylim()
-                all_vm_ax[col].set_yticks([vm_ax_ylim[0],0,vm_ax_ylim[1]])
                 
                 wba_ax_ylim = all_wba_ax[col].get_ylim()
                 all_wba_ax[col].set_yticks([wba_ax_ylim[0],0,wba_ax_ylim[1]])
@@ -740,16 +713,18 @@ class Spot_Phys(Phys_Flight):
                 # divide by sampling rate _______________________________
                 def div_sample_rate(x, pos): 
                     #The two args are the value and tick position 
-                    return (x-s_iti)/sampling_rate
+                    return x/self.sampling_rate
                     
                 formatter = FuncFormatter(div_sample_rate) 
+                all_wba_ax[col].xaxis.set_major_formatter(formatter)
                 all_stim_ax[col].xaxis.set_major_formatter(formatter)
+                all_stim_ax[col].set_xlim([0,.75*self.sampling_rate])
                                     
                 all_stim_ax[col].tick_params(labelbottom='on')
-                all_stim_ax[col].set_xlabel('Time from spot movement (s)') 
+                all_stim_ax[col].set_xlabel('Time (s)') 
 
             else: # remove all ylabels 
-                all_vm_ax[col].tick_params(labelleft='off')
+               
                 all_wba_ax[col].tick_params(labelleft='off')
                 all_stim_ax[col].tick_params(labelleft='off')
                 #all_corr_ax[col].tick_params(labelleft='off')
@@ -830,23 +805,19 @@ class Spot_Phys(Phys_Flight):
         #
         # this seems to work well, but I need to to show the windows of the saccades
         
+        iti_timepoints = self.iti_s * self.sampling_rate  
+        baseline_win = range(0,int(iti_timepoints/2)) 
         
-        if self.pin_behavior: 
-            sampling_rate = 1000            # in hertz ********* move to fly info
-            baseline_win = range(0,250)
-            turn_win = range(475,650)
-        else:
-            sampling_rate = 10000
-            baseline_win = range(0,2500)
-            turn_win = range(4750,6500)
-            
-        s_iti = .25 * sampling_rate      # ********* move to fly info
+        turn_start = -.05 # time in seconds relative spot movement start
+        turn_stop = .1
+        scaled_turn_start = int(turn_start*self.sampling_rate + iti_timepoints)
+        scaled_turn_stop = int(turn_stop*self.sampling_rate + iti_timepoints)
         
-        baseline_win = range(0,int(s_iti)) 
+        turn_win = np.arange(scaled_turn_start,scaled_turn_stop,dtype=int)
         
         #get all traces and detect saccades ______________________________________________
-        all_fly_traces, all_fly_saccades = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
-
+        all_fly_traces, all_fly_saccades = self.get_traces_by_stim('this_fly',iti_timepoints,get_saccades=False)
+        
         wba_trace = all_fly_traces.loc[:,('this_fly',slice(None),slice(None),'lmr')]
         baseline = np.nanmean(wba_trace.loc[baseline_win,:],0)
         turn_win_mean = np.nanmean(wba_trace.loc[turn_win,:],0) - baseline  
@@ -865,24 +836,18 @@ class Spot_Phys(Phys_Flight):
         #
         # this seems to work well, but I need to to show the windows of the saccades
         
+        iti_timepoints = self.iti_s * self.sampling_rate  
+        baseline_win = range(0,int(iti_timepoints/2)) 
         
-        if self.pin_behavior: 
-            sampling_rate = 1000            # in hertz ********* move to fly info
-            s_iti = .25 * sampling_rate
-            baseline_win = range(0,250)
-            turn_win = np.arange(475,650)+s_iti
-        else:
-            sampling_rate = 10000
-            s_iti = .25 * sampling_rate
-            baseline_win = range(0,2500)
-            turn_win = np.arange(4750,6500)+s_iti
-            
-          
+        turn_start = -.05 # time in seconds relative spot movement start
+        turn_stop = .1
+        scaled_turn_start = int(turn_start*self.sampling_rate + iti_timepoints)
+        scaled_turn_stop = int(turn_stop*self.sampling_rate + iti_timepoints)
         
-        baseline_win = range(0,int(s_iti)) 
+        turn_win = np.arange(scaled_turn_start,scaled_turn_stop,dtype=int)
         
         #get all traces and detect saccades ______________________________________________
-        all_fly_traces, all_fly_saccades = self.get_traces_by_stim('this_fly',s_iti,get_saccades=False)
+        all_fly_traces, all_fly_saccades = self.get_traces_by_stim('this_fly',iti_timepoints,get_saccades=False)
 
         fig = plt.figure(figsize=(9.5,11.5))       #(16.5, 9))
         
@@ -922,11 +887,10 @@ class Spot_Phys(Phys_Flight):
     
                    
     def get_traces_by_stim(self,fly_name='this_fly',iti=5000,get_saccades=False):
-    #here extract the traces for each of the stimulus times. 
-    #align to looming start, and add the first pre stim and post stim intervals
-    #here return a data frame of lwa and rwa wing traces
-    #self.stim_types already holds an np.array vector of the trial type indicies
-   
+    # here extract the traces for each of the stimulus times. 
+    # align to spot movement start, and add half iti intervals on both sides
+    #here return a data frame of lmr, vm, and xstim traces
+    
     #using a pandas data frame with multilevel indexing! rows = time in ms
     #columns are multileveled -- genotype, fly, trial index, trial type, trace
         
@@ -938,7 +902,7 @@ class Spot_Phys(Phys_Flight):
         for tr in range(self.n_trs):
             this_loom_start = self.tr_starts[tr]
             this_start = this_loom_start - iti
-            this_stop = self.tr_stops[tr] + pre_loom_stim_dur
+            this_stop = self.tr_stops[tr] + iti
             
             this_stim_type = self.stim_types[tr]
             iterables = [[fly_name],
@@ -1033,6 +997,9 @@ def process_wings(raw_wings):
     return processed_wings
      
 def find_saccades(raw_lmr_trace,test_plot=False):
+    # rewrite this to use the processed lmr trace 
+    #
+    
     #first fill in nans with nearest signal
     lmr_trace = raw_lmr_trace[~np.isnan(raw_lmr_trace)] 
         #this may give different indexing than input
@@ -1496,7 +1463,7 @@ def plot_pop_flight_behavior_means_overlay(population_df, two_genotypes, wba_lim
         + two_genotypes[0] + '_' + two_genotypes[1] + '.png',dpi=100)
     #plt.close('all')
 
-def plot_pop_flight_over_time(all_fnames,if_pin=False,title_txt='',wba_lim=[-1.5,1.5],if_save=True): 
+def plot_pop_flight_over_time(all_fnames,if_pin=False,title_txt='',if_save=True): 
         # clean this up --
         # first store all points by vectorizing
         # change from plot -> get with boolean for plotting
@@ -1506,8 +1473,14 @@ def plot_pop_flight_over_time(all_fnames,if_pin=False,title_txt='',wba_lim=[-1.5
         
         #get all traces and detect saccades ______________________________________________
         
+        if if_pin:
+            wba_ylim = [-1.5,1.5]
+        else:
+            wba_ylim = [-45,45]
         
-        behavior_path = '/Users/jamie/Dropbox/maimon lab - behavioral data/'
+        #behavior_path = '/Users/jamie/Dropbox/maimon lab - behavioral data/' # update this
+        behavior_path = '/Users/jamie/Dropbox/maimon lab - behavioral data/plate behavior/'
+        
         fig = plt.figure(figsize=(9.5,11.5))       #(16.5, 9))
         
         cnds_to_plot = range(4)
@@ -1547,7 +1520,7 @@ def plot_pop_flight_over_time(all_fnames,if_pin=False,title_txt='',wba_lim=[-1.5
         plt.xlabel('Trial number')
         plt.ylabel('L-R WBA in turn window')  
         plt.title(title_txt,fontsize=18)  
-        #plt.ylim([-1.5,1.5])
+        plt.ylim(wba_ylim)
         
         stim_types_labels = np.asarray(['Spot on right, front to back',\
                                         'Spot on right, back to front',\
