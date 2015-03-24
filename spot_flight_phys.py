@@ -22,7 +22,7 @@ import scipy as sp
 #---------------------------------------------------------------------------#
 
 class Phys_Flight():  
-    def __init__(self, fname, pin_behavior=False):
+    def __init__(self, fname, pin_behavior=False, cl_iti=False):
         if fname.endswith('.abf'):
             self.basename = ''.join(fname.split('.')[:-1])
             self.fname = fname
@@ -30,6 +30,7 @@ class Phys_Flight():
             self.basename = fname
             self.fname = self.basename + '.abf'  #check here for fname type 
         
+        self.cl_iti = cl_iti
         self.pin_behavior = pin_behavior
         if self.pin_behavior:
             self.sampling_rate = 1000
@@ -52,7 +53,7 @@ class Phys_Flight():
         
             self.ao = np.array(abf['ao1'])[inc_indicies]
         
-            self.vm = np.nan*np.ones_like(lmr)    #empty, although this is a hack. **
+            self.vm = np.nan*np.ones_like(self.lwa)    #empty, although this is a hack. **
             self.tach = np.array([])              #empty
             
         else:
@@ -125,7 +126,7 @@ class Spot_Phys(Phys_Flight):
         self.open_abf(ex_i)
         if not self.pin_behavior:
             self.clean_lmr_signal()
-        self.parse_trial_times()
+        self.parse_trial_times(False)
         self.parse_stim_type()
         
     def show_nonflight_exclusion(self,title_txt=''):
@@ -237,7 +238,15 @@ class Spot_Phys(Phys_Flight):
         
         ao_diff = np.diff(self.ao)
         
-        tr_start = self.samples[np.where(ao_diff <= -5)]
+        if self.cl_iti:
+            tr_start_thres = self.samples[np.where(ao_diff >= 5)] 
+            tr_start_thres_i = np.where(self.ao[tr_start_thres+50] > 3)[0]
+            
+            tr_start = tr_start_thres[tr_start_thres_i]
+        else:
+            tr_start = self.samples[np.where(ao_diff <= -5)]
+        
+        
         start_diff = np.diff(tr_start)
         redundant_starts = tr_start[np.where(start_diff < 100)]
         clean_tr_starts_unaligned = np.setdiff1d(tr_start,redundant_starts)+1
@@ -260,7 +269,13 @@ class Spot_Phys(Phys_Flight):
 #             clean_tr_starts[tr_i] = this_i_range[in_window_is[0]]
 #             
 #         
-        tr_stop = self.samples[np.where(ao_diff >= 5)]
+        if self.cl_iti:
+            tr_stop_thres = self.samples[np.where(ao_diff <= 5)] 
+            tr_stop_thres_i = np.where(self.ao[tr_stop_thres-50] > 3)[0]
+            
+            tr_stop = tr_stop_thres[tr_stop_thres_i]
+        else:
+            tr_stop = self.samples[np.where(ao_diff >= 5)]
         stop_diff = np.diff(tr_stop)
         redundant_stops = tr_stop[np.where(stop_diff < 100)] 
         clean_tr_stops = np.setdiff1d(tr_stop,redundant_stops)+1
@@ -280,7 +295,7 @@ class Spot_Phys(Phys_Flight):
         # now overwrite clean_tr_stops
         if self.pin_behavior:
             clean_tr_stops = clean_tr_starts + 908 
-        else:
+        elif not self.cl_iti:
             clean_tr_stops = clean_tr_starts + 9080
         
         # define tr_stop based on the end of xstim plateauing
@@ -324,22 +339,41 @@ class Spot_Phys(Phys_Flight):
         # 2.50; % [3] Spot on R, moving back to front (2nd stimulus, in order)
         # 2.40; % [4] Spot on R, moving front to back (1st stimulus, in order)
         
-        stim_types_labels = np.asarray(['Spot on right, front to back',\
-                                        'Spot on right, back to front',\
-                                        'Spot on left, front to back',\
-                                        'Spot on left, back to front'])
         
         stim_types = -1*np.ones(self.n_trs,'int')
         tr_ao_codes = np.empty(self.n_trs)
         
         #first loop through to get the unique ao values
         for tr in range(self.n_trs): 
-            if self.pin_behavior:
+            if self.cl_iti:
+                this_start = self.tr_starts[tr]+40
+                this_stop = self.tr_stops[tr]-40
+                
+                # overwrite stim labels here
+                stim_types_labels = np.asarray(['Spot on right, front to back',\
+                                        'Spot on left, front to back'])
+                
+            elif self.pin_behavior:
                 this_start = self.tr_starts[tr]-400
+                this_stop = self.tr_stops[tr]
+                
+                stim_types_labels = np.asarray(['Spot on right, front to back',\
+                                        'Spot on right, back to front',\
+                                        'Spot on left, front to back',\
+                                        'Spot on left, back to front'])
+                
             else:
                 this_start = self.tr_starts[tr]-4000
-            this_stop = self.tr_starts[tr]
-            tr_ao_codes[tr] = round(np.mean(self.ao[this_start:this_stop]),1)   
+                this_stop = self.tr_stops[tr]
+                
+                stim_types_labels = np.asarray(['Spot on right, front to back',\
+                                        'Spot on right, back to front',\
+                                        'Spot on left, front to back',\
+                                        'Spot on left, back to front'])
+        
+            
+            tr_ao_codes[tr] = round(10*np.nanmean(self.ao[this_start:this_stop]),0) #previously 1. should it be 0?
+            #print tr_ao_codes[tr]   
         unique_tr_ao_codes = np.unique(tr_ao_codes) 
         print 'trial types = ' + str(unique_tr_ao_codes)
         
@@ -571,7 +605,7 @@ class Spot_Phys(Phys_Flight):
             #plt.close('all')
             
     
-    def plot_wba_stim(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,25,dtype=int),\
+    def plot_wba_stim(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,10,dtype=int),\
                         if_save=True,if_x_zoom=True): 
     
         # just plot wba and stim
@@ -585,8 +619,16 @@ class Spot_Phys(Phys_Flight):
         iti_timepoints = self.iti_s * self.sampling_rate  
         baseline_win = range(0,int(iti_timepoints/2)) 
         
-        turn_start = -.05 # time in seconds relative spot movement start
-        turn_stop = .1
+        
+        if self.cl_iti:
+            turn_start = .225 # time in seconds relative spot movement start
+            turn_stop = .375
+        
+        else:
+            turn_start = -.05 # time in seconds relative spot movement start
+            turn_stop = .1
+        
+        
         scaled_turn_start = int(turn_start*self.sampling_rate + iti_timepoints)
         scaled_turn_stop = int(turn_stop*self.sampling_rate + iti_timepoints)
         
@@ -598,15 +640,16 @@ class Spot_Phys(Phys_Flight):
         all_fly_traces, all_fly_saccades, = self.get_traces_by_stim('this_fly',iti_timepoints,get_saccades=False)
         #all_fly_traces = pd.read_pickle(self.basename[-15:]+'_all_fly_traces.save')
         
+        n_cnds = np.size(np.unique(self.stim_types))
+        cnds_to_plot = range(n_cnds) # later change this to absolute stimulus displays
+        
         fig = plt.figure(figsize=(15,9))  
-        gs = gridspec.GridSpec(2,4,height_ratios=[1,.2])
+        gs = gridspec.GridSpec(2,n_cnds,height_ratios=[1,.2])
         gs.update(wspace=0.025, hspace=0.05) # set the spacing between axes. 
     
         #store all subplots for formatting later           
         all_wba_ax = []
         all_stim_ax = []
-        
-        cnds_to_plot = range(4) # later change this to absolute stimulus displays
         
         # now loop through the conditions/columns. ____________________________________
         # the signal types are encoded in separate rows(vm, wba, stim, corr)
@@ -667,11 +710,9 @@ class Spot_Phys(Phys_Flight):
             baseline_max_t = baseline_win[-1]
             all_wba_ax[col].axvspan(baseline_min_t, baseline_max_t, facecolor='grey', alpha=0.5)    
                 
-                     
             # set the ylim for the stimulus and correlation rows ______________________
             all_wba_ax[col].set_ylim(wba_lim)
             all_stim_ax[col].set_ylim([0,10])
-            
             
             # show turn window
             all_wba_ax[col].axvspan(scaled_turn_start, scaled_turn_stop, facecolor='grey', alpha=0.5)     
@@ -684,8 +725,6 @@ class Spot_Phys(Phys_Flight):
             all_wba_ax[col].tick_params(labelbottom='off')
             all_stim_ax[col].tick_params(labelbottom='off')
             #all_corr_ax[col].tick_params(labelbottom='off')
-            
-            
             
             all_wba_ax[col].relim()
             all_wba_ax[col].autoscale_view(True,True,True)
@@ -839,8 +878,15 @@ class Spot_Phys(Phys_Flight):
         iti_timepoints = self.iti_s * self.sampling_rate  
         baseline_win = range(0,int(iti_timepoints/2)) 
         
-        turn_start = -.05 # time in seconds relative spot movement start
-        turn_stop = .1
+        if self.cl_iti:
+            turn_start = .225 # time in seconds relative spot movement start
+            turn_stop = .375
+        
+        else:
+            turn_start = -.05 # time in seconds relative spot movement start
+            turn_stop = .1
+        
+        
         scaled_turn_start = int(turn_start*self.sampling_rate + iti_timepoints)
         scaled_turn_stop = int(turn_stop*self.sampling_rate + iti_timepoints)
         
