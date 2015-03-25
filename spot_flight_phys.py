@@ -22,7 +22,14 @@ import scipy as sp
 #---------------------------------------------------------------------------#
 
 class Phys_Flight():  
-    def __init__(self, fname, pin_behavior=False, cl_iti=False):
+    def __init__(self, fname, protocol='physiology, 4 spots'):
+        # protocol options supported -- 
+        # 'physiology, 4 spots' 
+        # '4 spots, bar cl iti'
+        # '2 spots, bar cl iti'
+        # '4 spots'
+        # 'pin behavior'
+    
         if fname.endswith('.abf'):
             self.basename = ''.join(fname.split('.')[:-1])
             self.fname = fname
@@ -30,9 +37,10 @@ class Phys_Flight():
             self.basename = fname
             self.fname = self.basename + '.abf'  #check here for fname type 
         
-        self.cl_iti = cl_iti
-        self.pin_behavior = pin_behavior
-        if self.pin_behavior:
+        self.protocol = protocol 
+        
+        
+        if self.protocol == 'pin behavior':
             self.sampling_rate = 1000
         else:
             self.sampling_rate = 10000
@@ -40,7 +48,7 @@ class Phys_Flight():
     def open_abf(self,exclude_indicies=[]):        
         abf = read_abf(self.fname)              
         
-        if self.pin_behavior: #different channels here, although same file structures
+        if self.protocol == 'pin behavior': #different channels here, although same file structures
             n_indicies = np.size(abf['stim_x'])      #assume all channels have the same sample #s 
             inc_indicies = np.setdiff1d(range(n_indicies),exclude_indicies);
                    
@@ -86,7 +94,7 @@ class Phys_Flight():
         # 18 march 2015 -- I need to update this for pin tethered flies
         # now it depends on the tachometers    
     
-        if self.pin_behavior: 
+        if self.protocol == 'pin behavior':
             print 'I need to fork pin-tethered flight detection'
             return True
         else:
@@ -122,11 +130,11 @@ class Phys_Flight():
 
 class Spot_Phys(Phys_Flight):
     
-    def process_fly(self,ex_i=[]):  #does this interfere with the Flight_Phys init?
+    def process_fly(self,show_tr_time_parsing=False,ex_i=[],):  #does this interfere with the Flight_Phys init?
         self.open_abf(ex_i)
-        if not self.pin_behavior:
+        if not self.protocol == 'pin behavior':
             self.clean_lmr_signal()
-        self.parse_trial_times(False)
+        self.parse_trial_times(show_tr_time_parsing)
         self.parse_stim_type()
         
     def show_nonflight_exclusion(self,title_txt=''):
@@ -238,13 +246,18 @@ class Spot_Phys(Phys_Flight):
         
         ao_diff = np.diff(self.ao)
         
-        if self.cl_iti:
+        if self.protocol == '4 spots, bar cl iti':
+            tr_start_thres = self.samples[np.where(ao_diff >= 5)] 
+            tr_start_thres_i = np.where(self.ao[tr_start_thres+50] > 2)[0]
+            tr_start = tr_start_thres[tr_start_thres_i]
+            
+        elif self.protocol == '2 spots, bar cl iti':
             tr_start_thres = self.samples[np.where(ao_diff >= 5)] 
             tr_start_thres_i = np.where(self.ao[tr_start_thres+50] > 3)[0]
-            
             tr_start = tr_start_thres[tr_start_thres_i]
+        
         else:
-            tr_start = self.samples[np.where(ao_diff <= -5)]
+            tr_start = self.samples[np.where(ao_diff <= -10)]
         
         
         start_diff = np.diff(tr_start)
@@ -254,7 +267,9 @@ class Spot_Phys(Phys_Flight):
         
         # now shift tr_start based on the xstim signal
         # look within a ~3000 window for the start
-        #clean_tr_starts = clean_tr_starts - 1500  # ***** update this to be exact. later
+        
+        if self.protocol == '4 spots' or self.protocol == 'physiology, 4 spots':
+            clean_tr_starts = clean_tr_starts - 1500  # ***** update this to be exact. later
         
         # max_shift = int(3500e6)
 #         n_starts = np.size(clean_tr_starts_unaligned)
@@ -269,16 +284,26 @@ class Spot_Phys(Phys_Flight):
 #             clean_tr_starts[tr_i] = this_i_range[in_window_is[0]]
 #             
 #         
-        if self.cl_iti:
+        
+        if self.protocol == '2 spots, bar cl iti':
             tr_stop_thres = self.samples[np.where(ao_diff <= 5)] 
-            tr_stop_thres_i = np.where(self.ao[tr_stop_thres-50] > 3)[0]
-            
+            tr_stop_thres_i = np.where(self.ao[tr_stop_thres-50] > 2)[0]
             tr_stop = tr_stop_thres[tr_stop_thres_i]
         else:
             tr_stop = self.samples[np.where(ao_diff >= 5)]
+            
         stop_diff = np.diff(tr_stop)
         redundant_stops = tr_stop[np.where(stop_diff < 100)] 
         clean_tr_stops = np.setdiff1d(tr_stop,redundant_stops)+1
+        
+        #now overwrite clean_tr_stops
+        if self.protocol == '4 spots, bar cl iti':
+            clean_tr_stops = clean_tr_starts + 9080
+        elif self.protocol == '4 spots' or self.protocol == 'physiology, 4 spots':
+            clean_tr_stops = clean_tr_starts + 1800
+        elif self.protocol == 'pin behavior':
+            clean_tr_stops = clean_tr_starts + 908 
+        
         
         # check that first start is before first stop
         if clean_tr_stops[0] < clean_tr_starts[0]: 
@@ -292,18 +317,8 @@ class Spot_Phys(Phys_Flight):
         if clean_tr_starts[1] < clean_tr_stops[0]:    
             clean_tr_starts = np.delete(clean_tr_starts,0)
         
-        # now overwrite clean_tr_stops
-        if self.pin_behavior:
-            clean_tr_stops = clean_tr_starts + 908 
-        elif not self.cl_iti:
-            clean_tr_stops = clean_tr_starts + 9080
+
         
-        # define tr_stop based on the end of xstim plateauing
-        # around 8.6 ao
-        # alternatively, I could just set a fixed time for now.
-        
-        # should check for same # of starts and stops *****
-        # add a warning here if these don't align
         n_trs = len(clean_tr_starts)
         
         print np.size(clean_tr_starts), np.size(clean_tr_stops)
@@ -329,64 +344,65 @@ class Spot_Phys(Phys_Flight):
         self.tr_stops = clean_tr_stops
         
         ## here remove all trials in which the fly is not flying. 
-        #self.remove_non_flight_trs()
+        self.remove_non_flight_trs()
         
     def parse_stim_type(self):
-        #calculate the stimulus type
+        # calculate the stimulus type 
+        # update on March 24, 2015 -- now indexing the absolute, rather than relative,
+        # stimulus type. calculate from the ao intervals.
         
-        # 3.80; % [1] Spot on L, moving back to front (4th stimulus, in order)
-        # 3.90; % [2] Spot on L, moving front to back (3rd stimulus, in order)
-        # 2.50; % [3] Spot on R, moving back to front (2nd stimulus, in order)
-        # 2.40; % [4] Spot on R, moving front to back (1st stimulus, in order)
+        # from GM's physiology data 
+        ## 3.80; % [1] Spot on L, moving back to front (4th stimulus, in order)
+        ## 3.90; % [2] Spot on L, moving front to back (3rd stimulus, in order)
+        ## 2.50; % [3] Spot on R, moving back to front (2nd stimulus, in order)
+        ## 2.40; % [4] Spot on R, moving front to back (1st stimulus, in order)
         
+        self.stim_types_labels = {24:'Spot on right, 1 p offset, front to back',\
+                            25:'Spot on right, 1 p offset, back to front',\
+                            38:'Spot on left, 1 p offset, back to front',\
+                            39:'Spot on left, 1 p offset, front to back' ,\
+                            44:'Spot on right, .5 p offset, front to back',\
+                            46:'Spot on left, .5 p offset, front to back'}
+        self.all_stim_types = self.stim_types_labels.keys()
         
         stim_types = -1*np.ones(self.n_trs,'int')
-        tr_ao_codes = np.empty(self.n_trs)
         
-        #first loop through to get the unique ao values
+        if self.protocol == '4 spots, bar cl iti':
+            start_offset = 40
+            stop_offset = -40 
+        elif self.protocol == '4 spots' or self.protocol == 'physiology, 4 spots':
+            start_offset = -5000
+            stop_offset = -1000 
+        elif self.protocol == '2 spots, bar cl iti':  
+            start_offset = 40
+            stop_offset = -40 
+        elif self.protocol == 'pin behavior':
+            start_offset = -400
+            stop_offset = 0
+        else:
+            start_offset = 4000  # I think this is actually for the 4 spots+iti?
+            stop_offset = 0
+        
+        # loop through to get the ao values
         for tr in range(self.n_trs): 
-            if self.cl_iti:
-                this_start = self.tr_starts[tr]+40
-                this_stop = self.tr_stops[tr]-40
+            this_start = self.tr_starts[tr]+start_offset
+            this_stop = self.tr_stops[tr]+stop_offset
                 
-                # overwrite stim labels here
-                stim_types_labels = np.asarray(['Spot on right, front to back',\
-                                        'Spot on left, front to back'])
-                
-            elif self.pin_behavior:
-                this_start = self.tr_starts[tr]-400
-                this_stop = self.tr_stops[tr]
-                
-                stim_types_labels = np.asarray(['Spot on right, front to back',\
-                                        'Spot on right, back to front',\
-                                        'Spot on left, front to back',\
-                                        'Spot on left, back to front'])
-                
-            else:
-                this_start = self.tr_starts[tr]-4000
-                this_stop = self.tr_stops[tr]
-                
-                stim_types_labels = np.asarray(['Spot on right, front to back',\
-                                        'Spot on right, back to front',\
-                                        'Spot on left, front to back',\
-                                        'Spot on left, back to front'])
-        
+            stim_types[tr] = round(10*np.nanmean(self.ao[this_start:this_stop])) 
             
-            tr_ao_codes[tr] = round(10*np.nanmean(self.ao[this_start:this_stop]),0) #previously 1. should it be 0?
-            #print tr_ao_codes[tr]   
-        unique_tr_ao_codes = np.unique(tr_ao_codes) 
-        print 'trial types = ' + str(unique_tr_ao_codes)
-        
-        for tr in range(self.n_trs): 
-            tr_ao_code = tr_ao_codes[tr]         
+            #if stim_types[tr] not in self.all_stim_types:
+            #    print 'tr' + str(tr) + ' = ' + str(stim_types[tr]) + ', removing trial'
+            #    
+            #    self.tr_starts = np.delete(self.tr_starts,tr)
+            #    self.tr_stops = np.delete(self.tr_stops,tr)
+            #    self.n_trs = self.n_trs - 1
             
-            if not np.isnan(tr_ao_code):
-                stim_types[tr] = int(np.where(unique_tr_ao_codes == tr_ao_code)[0])
-                
+        self.unique_stim_types = np.unique(stim_types) 
+        print 'trial types = ' + str(self.unique_stim_types)
         
         self.stim_types = stim_types  #change to integer, although nans are also useful
-        self.stim_types_labels = stim_types_labels
-           
+       
+          
     def plot_vm_wba_stim_corr(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,30,dtype=int),\
                               vm_lim=[-80,-60],wba_lim=[-45,45],if_save=True,if_x_zoom=True): 
     
@@ -605,13 +621,13 @@ class Spot_Phys(Phys_Flight):
             #plt.close('all')
             
     
-    def plot_wba_stim(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,10,dtype=int),\
+    def plot_wba_stim(self,title_txt='',vm_base_subtract=False,subset_is = np.arange(0,20,dtype=int),\
                         if_save=True,if_x_zoom=True): 
     
         # just plot wba and stim
         # four columns of stimulus types
         
-        if self.pin_behavior:
+        if self.protocol == 'pin behavior':
             wba_lim=[-1.5,1.5]
         else:
             wba_lim=[-45,45]
@@ -620,14 +636,20 @@ class Spot_Phys(Phys_Flight):
         baseline_win = range(0,int(iti_timepoints/2)) 
         
         
-        if self.cl_iti:
+        if self.protocol =='2 spots, bar cl iti':
             turn_start = .225 # time in seconds relative spot movement start
             turn_stop = .375
-        
+        elif self.protocol == '4 spots, bar cl iti':
+            turn_start = 1.025 # time in seconds relative spot movement start
+            turn_stop = 1.175
+        elif self.protocol == '4 spots' or self.protocol == 'physiology, 4 spots':
+            turn_start = .075 # time in seconds relative spot movement start
+            turn_stop = .225
         else:
             turn_start = -.05 # time in seconds relative spot movement start
             turn_stop = .1
         
+        print turn_start
         
         scaled_turn_start = int(turn_start*self.sampling_rate + iti_timepoints)
         scaled_turn_stop = int(turn_stop*self.sampling_rate + iti_timepoints)
@@ -640,10 +662,10 @@ class Spot_Phys(Phys_Flight):
         all_fly_traces, all_fly_saccades, = self.get_traces_by_stim('this_fly',iti_timepoints,get_saccades=False)
         #all_fly_traces = pd.read_pickle(self.basename[-15:]+'_all_fly_traces.save')
         
-        n_cnds = np.size(np.unique(self.stim_types))
-        cnds_to_plot = range(n_cnds) # later change this to absolute stimulus displays
+        cnds_to_plot = np.unique(self.stim_types)
+        n_cnds = np.size(cnds_to_plot) # later change this to absolute stimulus displays
         
-        fig = plt.figure(figsize=(15,9))  
+        fig = plt.figure(figsize=((17.95,6.9125)))  
         gs = gridspec.GridSpec(2,n_cnds,height_ratios=[1,.2])
         gs.update(wspace=0.025, hspace=0.05) # set the spacing between axes. 
     
@@ -653,10 +675,11 @@ class Spot_Phys(Phys_Flight):
         
         # now loop through the conditions/columns. ____________________________________
         # the signal types are encoded in separate rows(vm, wba, stim, corr)
-        for cnd, grid_col in zip(cnds_to_plot,range(4)):
+        for cnd, grid_col in zip(cnds_to_plot,range(n_cnds)):
         
             this_cnd_trs = all_fly_traces.loc[:,('this_fly',slice(None),cnd,'lmr')].columns.get_level_values(1)
             n_all_reps = np.size(this_cnd_trs)
+            
             subset_to_plot = this_cnd_trs[subset_is]
             if cnd == 0: 
                 tr_txt = 'trs ' + str(subset_is[0]) + '-' + str(subset_is[-1]) + ' of ' +str(n_all_reps)
@@ -728,13 +751,13 @@ class Spot_Phys(Phys_Flight):
             
             all_wba_ax[col].relim()
             all_wba_ax[col].autoscale_view(True,True,True)
-            all_wba_ax[col].set_title(self.stim_types_labels[col],fontsize=12)
+            all_wba_ax[col].set_title(self.stim_types_labels[cnd],fontsize=12)
                 
             all_wba_ax[col].axhline(color=black)
             
             if col == 0: #label yaxes
                 
-                if self.pin_behavior:    
+                if self.protocol == 'pin behavior':   
                     all_wba_ax[col].set_ylabel('L-R WBA (V)')
                 else:
                     all_wba_ax[col].set_ylabel('WBA (degrees)')
@@ -757,7 +780,13 @@ class Spot_Phys(Phys_Flight):
                 formatter = FuncFormatter(div_sample_rate) 
                 all_wba_ax[col].xaxis.set_major_formatter(formatter)
                 all_stim_ax[col].xaxis.set_major_formatter(formatter)
-                all_stim_ax[col].set_xlim([0,.75*self.sampling_rate])
+                
+                if self.protocol == '2 spots, bar cl iti':
+                    all_stim_ax[col].set_xlim([0,1.25*self.sampling_rate])
+                #else:
+                #    all_stim_ax[col].set_xlim([0,.75*self.sampling_rate])
+                
+                
                                     
                 all_stim_ax[col].tick_params(labelbottom='on')
                 all_stim_ax[col].set_xlabel('Time (s)') 
@@ -772,7 +801,7 @@ class Spot_Phys(Phys_Flight):
         #fig.text(.775,.905,'Right',fontsize=14)
         
         figure_txt = title_txt
-        fig.text(.425,.95,figure_txt,fontsize=18) 
+        fig.text(.33,.95,figure_txt,fontsize=18) 
         
         #fig.text(.05,.95,tr_info_str,fontsize=14) 
                
@@ -781,10 +810,10 @@ class Spot_Phys(Phys_Flight):
         if if_save:
             saveas_path = '/Users/jamie/bin/figures/'
             if if_x_zoom:
-                plt.savefig(saveas_path + figure_txt + '_' + tr_txt + '_fast_spot_vm_wings_zoomed.png',\
+                plt.savefig(saveas_path + figure_txt + '_fast_spot_vm_wings_zoomed.png',\
                 bbox_inches='tight',dpi=100) 
             else:
-                plt.savefig(saveas_path + figure_txt + '_' + tr_txt + '_fast_spot_vm_wings.png',\
+                plt.savefig(saveas_path + figure_txt + '_fast_spot_vm_wings.png',\
                 bbox_inches='tight',dpi=100) 
             #plt.close('all')
              
@@ -847,8 +876,21 @@ class Spot_Phys(Phys_Flight):
         iti_timepoints = self.iti_s * self.sampling_rate  
         baseline_win = range(0,int(iti_timepoints/2)) 
         
-        turn_start = -.05 # time in seconds relative spot movement start
-        turn_stop = .1
+        
+        
+        if self.protocol =='2 spots, bar cl iti':
+            turn_start = .225 # time in seconds relative spot movement start
+            turn_stop = .375
+        elif self.protocol == '4 spots, bar cl iti':
+            turn_start = 1.025 # time in seconds relative spot movement start
+            turn_stop = 1.175
+        elif self.protocol == '4 spots' or self.protocol == 'physiology, 4 spots':
+            turn_start = .075 # time in seconds relative spot movement start
+            turn_stop = .225
+        else:
+            turn_start = -.05 # time in seconds relative spot movement start
+            turn_stop = .1
+        
         scaled_turn_start = int(turn_start*self.sampling_rate + iti_timepoints)
         scaled_turn_stop = int(turn_stop*self.sampling_rate + iti_timepoints)
         
@@ -878,14 +920,18 @@ class Spot_Phys(Phys_Flight):
         iti_timepoints = self.iti_s * self.sampling_rate  
         baseline_win = range(0,int(iti_timepoints/2)) 
         
-        if self.cl_iti:
+        if self.protocol =='2 spots, bar cl iti':
             turn_start = .225 # time in seconds relative spot movement start
             turn_stop = .375
-        
+        elif self.protocol == '4 spots, bar cl iti':
+            turn_start = 1.0 # time in seconds relative spot movement start
+            turn_stop = 1.15
+        elif self.protocol == '4 spots' or self.protocol == 'physiology, 4 spots':
+            turn_start = .075 # time in seconds relative spot movement start
+            turn_stop = .225
         else:
             turn_start = -.05 # time in seconds relative spot movement start
             turn_stop = .1
-        
         
         scaled_turn_start = int(turn_start*self.sampling_rate + iti_timepoints)
         scaled_turn_stop = int(turn_stop*self.sampling_rate + iti_timepoints)
@@ -923,8 +969,8 @@ class Spot_Phys(Phys_Flight):
         plt.title(title_txt,fontsize=18)  
         #plt.ylim([-1.5,1.5])
         
-        for cnd in range(np.size(cnds_to_plot)):
-            fig.text(.7,.85-.03*cnd,self.stim_types_labels[cnd],color=all_colors[cnds_to_plot[cnd]],fontsize=14) 
+        for cnd,i in zip(cnds_to_plot,range(np.size(cnds_to_plot))):
+            fig.text(.7,.85-.03*i,self.stim_types_labels[cnd],color=all_colors[i],fontsize=14) 
         
         if if_save:
             saveas_path = '/Users/jamie/bin/figures/'
@@ -1509,32 +1555,42 @@ def plot_pop_flight_behavior_means_overlay(population_df, two_genotypes, wba_lim
         + two_genotypes[0] + '_' + two_genotypes[1] + '.png',dpi=100)
     #plt.close('all')
 
-def plot_pop_flight_over_time(all_fnames,if_pin=False,title_txt='',if_save=True): 
-        # clean this up --
-        # first store all points by vectorizing
-        # change from plot -> get with boolean for plotting
-        # make a separate function for plotting the population change over time
-        #
-        # this seems to work well, but I need to to show the windows of the saccades
+def plot_pop_flight_over_time(all_fnames,protocol,if_save=True): 
+        # march 24 2015 -- update this to select filename that match the protocol
+        # build title text from protocol and n flies
+        # get number of conditions from single flies
+        # use a uniform color code across tasks
+        
+        
         
         #get all traces and detect saccades ______________________________________________
         
-        if if_pin:
+        if protocol == 'pin behavior':
             wba_ylim = [-1.5,1.5]
         else:
             wba_ylim = [-45,45]
         
-        #behavior_path = '/Users/jamie/Dropbox/maimon lab - behavioral data/' # update this
         behavior_path = '/Users/jamie/Dropbox/maimon lab - behavioral data/plate behavior/'
+        physiology_path= '/Users/jamie/maimon lab/fast spot physiology 2015/'
+        
+        if protocol == 'physiology, 4 spots':
+            path = physiology_path
+        else:
+            path = behavior_path
+        
         
         fig = plt.figure(figsize=(9.5,11.5))       #(16.5, 9))
         
-        cnds_to_plot = range(4)
+        #cnds_to_plot = range(4)
         all_colors = [blue,magenta,green,black]
         
         n_flies = np.size(all_fnames)
         print n_flies
-        n_cnds = 4
+        
+        title_txt = protocol + ' n=' + str(n_flies)
+        
+        cnds_to_plot = [24,39] #[44,46]#fly.unique_stim_types
+        n_cnds = np.size(cnds_to_plot)
         max_trs = 150
         
         fly_traces_by_cnd = np.nan*np.ones([n_flies,n_cnds,max_trs])
@@ -1543,23 +1599,26 @@ def plot_pop_flight_over_time(all_fnames,if_pin=False,title_txt='',if_save=True)
             # fly init
             # get fly conditions and traces
             
-            fly = Spot_Phys(behavior_path + f_name,if_pin)
+            fly = Spot_Phys(path + f_name,protocol)
             fly.process_fly()
             lmr_avg, cnd_types = fly.get_flight_over_time()
 
-            
-            for cnd in cnds_to_plot:
+            for cnd,i in zip(cnds_to_plot,range(n_cnds)):
                 this_cnd_trs = np.where(cnd_types == cnd)[0]
                 n_trs = np.size(this_cnd_trs)
-                this_color = all_colors[cnd]
+                this_color = all_colors[i]
                 plt.plot(range(n_trs),lmr_avg[this_cnd_trs],'-',color=this_color)
         
             
                 #save all means/fly
-                fly_traces_by_cnd[fly_i,cnd,range(0,n_trs)] = lmr_avg[this_cnd_trs]
+                if n_trs > max_trs:
+                    fly_traces_by_cnd[fly_i,i,range(0,max_trs)] = lmr_avg[this_cnd_trs[0:max_trs]]
+                else:
+                    fly_traces_by_cnd[fly_i,i,range(0,n_trs)] = lmr_avg[this_cnd_trs]
+                
         
-        for cnd in cnds_to_plot:
-            plt.plot(np.nanmean(fly_traces_by_cnd,0)[cnd],color=all_colors[cnd],linewidth=4)
+        for i in range(n_cnds):
+            plt.plot(np.nanmean(fly_traces_by_cnd,0)[i],color=all_colors[i],linewidth=4)
             
         plt.axhline(linewidth=.5, color=black)
                 
@@ -1567,14 +1626,12 @@ def plot_pop_flight_over_time(all_fnames,if_pin=False,title_txt='',if_save=True)
         plt.ylabel('L-R WBA in turn window')  
         plt.title(title_txt,fontsize=18)  
         plt.ylim(wba_ylim)
+        plt.xlim([0,60])
         
-        stim_types_labels = np.asarray(['Spot on right, front to back',\
-                                        'Spot on right, back to front',\
-                                        'Spot on left, front to back',\
-                                        'Spot on left, back to front'])
+        for cnd,i in zip(cnds_to_plot,range(n_cnds)):
+            fig.text(.45,.85-.03*i,fly.stim_types_labels[cnd],color=all_colors[i],fontsize=14) 
         
-        for cnd in range(np.size(cnds_to_plot)):
-            fig.text(.7,.85-.03*cnd,stim_types_labels[cnd],color=all_colors[cnds_to_plot[cnd]],fontsize=14) 
+        
         
         if if_save:
             saveas_path = '/Users/jamie/bin/figures/'
